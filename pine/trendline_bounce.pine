@@ -1,0 +1,185 @@
+//@version=6
+// ============================================================================
+//  Trendline Bounce — one strategy, no clutter
+// ----------------------------------------------------------------------------
+//  A line is drawn through confirmed pivot highs (resistance, red) and pivot
+//  lows (support, teal). Maximum 2 lines per side, so the chart stays clean.
+//  A "B" prints only when price bounces a line with 3+ touches:
+//    green B below the bar = long bounce, red B above = short bounce.
+//  Optional entry / stop / 1R / 2R projection on every signal.
+//  Built for XAUUSD on 4H and 15m. This draws setups, it does not pick
+//  trades: confirm trend direction and your playbook rules before entering.
+// ============================================================================
+indicator("Trendline Bounce", shorttitle="TL Bounce",
+     overlay=true, max_lines_count=200, max_labels_count=200)
+
+max_bars_back(close, 500)
+
+// ===================== INPUTS =====================
+pivLeft      = input.int(5, "Pivot left bars", minval=1, maxval=50)
+pivRight     = input.int(5, "Pivot right bars", minval=1, maxval=50)
+atrLen       = input.int(14, "ATR length", minval=1)
+tolMult      = input.float(0.25, "Touch tolerance (x ATR)", minval=0.05, maxval=2.0, step=0.05)
+minTouches   = input.int(3, "Min touches for a valid line", minval=2, maxval=10)
+maxLinesSide = input.int(2, "Max lines per side", minval=1, maxval=5)
+showBounce   = input.bool(true, "Show bounce signals")
+showRR       = input.bool(true, "Show entry / stop / 1R / 2R")
+showTouchLbl = input.bool(true, "Show touch count")
+rrBars       = input.int(20, "RR projection length (bars)", minval=5, maxval=100)
+supColor     = input.color(color.teal, "Support line color")
+resColor     = input.color(color.red, "Resistance line color")
+
+// ===================== CORE =====================
+atr = ta.atr(atrLen)
+tol = atr * tolMult
+
+var array<int>   phX = array.new_int()
+var array<float> phY = array.new_float()
+var array<int>   plX = array.new_int()
+var array<float> plY = array.new_float()
+
+var array<line>  resLn  = array.new_line()
+var array<int>   resX2  = array.new_int()
+var array<int>   resTch = array.new_int()
+var array<int>   resLTB = array.new_int()   // last touch bar
+var array<int>   resLSB = array.new_int()   // last signal bar
+var array<label> resLbl = array.new_label()
+
+var array<line>  supLn  = array.new_line()
+var array<int>   supX2  = array.new_int()
+var array<int>   supTch = array.new_int()
+var array<int>   supLTB = array.new_int()
+var array<int>   supLSB = array.new_int()
+var array<label> supLbl = array.new_label()
+
+// Draw a trendline through two pivots. Anchors count as the first 2 touches.
+pushTrendLine(isRes, x1, y1, x2, y2) =>
+    col = isRes ? resColor : supColor
+    ln = line.new(x1, y1, x2, y2, extend=extend.right, color=col, width=2)
+    lb = showTouchLbl ? label.new(x2, y2, "2",
+         style=isRes ? label.style_label_down : label.style_label_up,
+         color=color.new(col, 100), textcolor=col, size=size.tiny) : na
+    if isRes
+        array.push(resLn, ln)
+        array.push(resX2, x2)
+        array.push(resTch, 2)
+        array.push(resLTB, x2)
+        array.push(resLSB, -1)
+        array.push(resLbl, lb)
+        if array.size(resLn) > maxLinesSide
+            line.delete(array.shift(resLn))
+            array.shift(resX2)
+            array.shift(resTch)
+            array.shift(resLTB)
+            array.shift(resLSB)
+            oldLb = array.shift(resLbl)
+            if not na(oldLb)
+                label.delete(oldLb)
+    else
+        array.push(supLn, ln)
+        array.push(supX2, x2)
+        array.push(supTch, 2)
+        array.push(supLTB, x2)
+        array.push(supLSB, -1)
+        array.push(supLbl, lb)
+        if array.size(supLn) > maxLinesSide
+            line.delete(array.shift(supLn))
+            array.shift(supX2)
+            array.shift(supTch)
+            array.shift(supLTB)
+            array.shift(supLSB)
+            oldLb = array.shift(supLbl)
+            if not na(oldLb)
+                label.delete(oldLb)
+
+ph = ta.pivothigh(high, pivLeft, pivRight)
+pl = ta.pivotlow(low, pivLeft, pivRight)
+
+if not na(ph)
+    px = bar_index - pivRight
+    array.push(phX, px)
+    array.push(phY, ph)
+    if array.size(phX) >= 2
+        s = array.size(phX)
+        pushTrendLine(true, array.get(phX, s - 2), array.get(phY, s - 2),
+             array.get(phX, s - 1), array.get(phY, s - 1))
+
+if not na(pl)
+    px = bar_index - pivRight
+    array.push(plX, px)
+    array.push(plY, pl)
+    if array.size(plX) >= 2
+        s = array.size(plX)
+        pushTrendLine(false, array.get(plX, s - 2), array.get(plY, s - 2),
+             array.get(plX, s - 1), array.get(plY, s - 1))
+
+// ===================== RISK / REWARD PROJECTION =====================
+drawRR(isLong, entry, stop) =>
+    r = math.abs(entry - stop)
+    line.new(bar_index, entry, bar_index + rrBars, entry,
+         color=color.new(color.gray, 0), style=line.style_dashed, width=1)
+    line.new(bar_index, stop, bar_index + rrBars, stop,
+         color=color.new(color.red, 0), width=1)
+    t1 = isLong ? entry + r : entry - r
+    t2 = isLong ? entry + 2 * r : entry - 2 * r
+    line.new(bar_index, t1, bar_index + rrBars, t1, color=color.new(color.green, 0), width=1)
+    line.new(bar_index, t2, bar_index + rrBars, t2,
+         color=color.new(color.green, 0), style=line.style_dashed, width=1)
+    label.new(bar_index + rrBars, entry, "Entry", style=label.style_label_left,
+         color=color.new(color.gray, 100), textcolor=color.gray, size=size.tiny)
+    label.new(bar_index + rrBars, stop, "Stop", style=label.style_label_left,
+         color=color.new(color.gray, 100), textcolor=color.red, size=size.tiny)
+    label.new(bar_index + rrBars, t1, "1R", style=label.style_label_left,
+         color=color.new(color.gray, 100), textcolor=color.green, size=size.tiny)
+    label.new(bar_index + rrBars, t2, "2R", style=label.style_label_left,
+         color=color.new(color.gray, 100), textcolor=color.green, size=size.tiny)
+
+// ===================== TOUCH SCAN + BOUNCE SIGNALS =====================
+// Resistance lines
+if array.size(resLn) > 0
+    for i = 0 to array.size(resLn) - 1
+        ln = array.get(resLn, i)
+        x2 = array.get(resX2, i)
+        if bar_index > x2
+            ly = line.get_price(ln, bar_index)
+            if not na(ly)
+                touched = math.abs(high - ly) <= tol
+                if touched and bar_index != array.get(resLTB, i)
+                    array.set(resTch, i, array.get(resTch, i) + 1)
+                    array.set(resLTB, i, bar_index)
+                lb = array.get(resLbl, i)
+                if not na(lb)
+                    label.set_xy(lb, bar_index, ly)
+                    label.set_text(lb, str.tostring(array.get(resTch, i)))
+                valid = array.get(resTch, i) >= minTouches
+                if showBounce and valid and touched and close < ly - tol and bar_index != array.get(resLSB, i)
+                    array.set(resLSB, i, bar_index)
+                    label.new(bar_index, high, "B", style=label.style_label_down,
+                         color=color.red, textcolor=color.white, size=size.small)
+                    alert("Bounce SHORT signal", alert.freq_once_per_bar_close)
+                    if showRR
+                        drawRR(false, close, ly + tol)
+// Support lines
+if array.size(supLn) > 0
+    for i = 0 to array.size(supLn) - 1
+        ln = array.get(supLn, i)
+        x2 = array.get(supX2, i)
+        if bar_index > x2
+            ly = line.get_price(ln, bar_index)
+            if not na(ly)
+                touched = math.abs(low - ly) <= tol
+                if touched and bar_index != array.get(supLTB, i)
+                    array.set(supTch, i, array.get(supTch, i) + 1)
+                    array.set(supLTB, i, bar_index)
+                lb = array.get(supLbl, i)
+                if not na(lb)
+                    label.set_xy(lb, bar_index, ly)
+                    label.set_text(lb, str.tostring(array.get(supTch, i)))
+                valid = array.get(supTch, i) >= minTouches
+                if showBounce and valid and touched and close > ly + tol and bar_index != array.get(supLSB, i)
+                    array.set(supLSB, i, bar_index)
+                    label.new(bar_index, low, "B", style=label.style_label_up,
+                         color=color.teal, textcolor=color.white, size=size.small)
+                    alert("Bounce LONG signal", alert.freq_once_per_bar_close)
+                    if showRR
+                        drawRR(true, close, ly - tol)
