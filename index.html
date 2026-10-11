@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Trading EA — Supply &amp; Demand | Deva Gana LLC</title>
+<style>
+  :root { --navy:#1F4E5F; --gold:#C9A227; --cream:#FAF7F0; --ink:#2b2b2b; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; background:var(--cream); color:var(--ink); line-height:1.6; }
+  header { background:var(--navy); color:#fff; padding:3rem 1.5rem; text-align:center; }
+  header h1 { font-size:2rem; margin-bottom:.5rem; }
+  header p { opacity:.85; max-width:640px; margin:0 auto; }
+  .badge { display:inline-block; background:var(--gold); color:#1a1a1a; font-weight:700; font-size:.8rem; padding:.3rem .9rem; border-radius:999px; margin-bottom:1rem; }
+  main { max-width:860px; margin:0 auto; padding:2rem 1.5rem 4rem; }
+  section { background:#fff; border-radius:12px; padding:1.75rem; margin-bottom:1.5rem; box-shadow:0 2px 8px rgba(0,0,0,.06); }
+  h2 { color:var(--navy); margin-bottom:.75rem; font-size:1.3rem; }
+  ul { padding-left:1.25rem; }
+  li { margin-bottom:.4rem; }
+  a { color:var(--navy); font-weight:600; }
+  .files a { display:block; padding:.6rem .8rem; border:1px solid #e5ddd0; border-radius:8px; margin-bottom:.5rem; text-decoration:none; }
+  .files a:hover { background:#f4efe4; }
+  .files small { display:block; font-weight:400; color:#666; }
+  footer { text-align:center; padding:2rem; color:#888; font-size:.85rem; }
+  .warn { background:#fff8e1; border-left:4px solid var(--gold); padding:1rem 1.25rem; border-radius:0 8px 8px 0; margin-bottom:1.5rem; }
+</style>
+</head>
+<body>
+<header>
+  <div class="badge">DEMO ONLY — NO LIVE TRADING YET</div>
+  <h1>Supply &amp; Demand Trading EAs</h1>
+  <p>MT5 expert advisors and TradingView indicators for XAUUSD, built around pure supply-and-demand price action. By Deva Gana LLC.</p>
+</header>
+<main>
+  <div class="warn"><strong>Design rule:</strong> these EAs trade only what Brittany would trade manually — supply and demand price action plus risk rules. Nothing else.</div>
+
+  <section>
+    <h2>The EAs</h2>
+    <ul>
+      <li><strong>SupplyDemandScalp</strong> — main EA. XAUUSD, 4H supply/demand zones, 15m entries, 1% risk per trade, one position at a time, 4% daily stop.</li>
+      <li><strong>SupplyDemandAuto</strong> — earlier automated variant.</li>
+      <li><strong>SupplyDemandDayTrade</strong> — day-trading variant.</li>
+      <li><strong>TrendlineBounceManager</strong> — trendline bounce trade manager.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>TradingView Indicators</h2>
+    <ul>
+      <li><strong>trendline_bounce.pine</strong> — bounce signals (Pine v6).</li>
+      <li><strong>supply_demand_zones.pine</strong> — supply and demand zone plotting (Pine v6).</li>
+      <li><strong>trendline_supply_demand_toolkit.pine</strong> — combined toolkit.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Evaluation Gates</h2>
+    <p>No live money until every gate passes:</p>
+    <ul>
+      <li>Compiles without errors</li>
+      <li>Broker server time and XAUUSD symbol details verified</li>
+      <li>At least 50 demo trades completed</li>
+      <li>Win rate, profit factor, drawdown, expectancy, and rule compliance reviewed</li>
+    </ul>
+  </section>
+
+  <section class="files">
+    <h2>Downloads</h2>
+    <a href="https://github.com/BrittanyNation/trading-ea/tree/main/experts">Expert Advisors (.mq5)<small>Install via MQL5/Experts, turn Algo Trading on</small></a>
+    <a href="https://github.com/BrittanyNation/trading-ea/tree/main/pine">Pine Indicators<small>Paste into TradingView Pine Editor</small></a>
+    <a href="https://github.com/BrittanyNation/trading-ea/tree/main/docs">Docs<small>Evaluation tracker, trade journal, rollout brief</small></a>
+    <a href="https://github.com/BrittanyNation/trading-ea">GitHub Repository<small>Source, issues, and updates</small></a>
+  </section>
+</main>
+<footer>Deva Gana LLC &middot; For education and evaluation purposes only. Trading involves risk.</footer>
+</body>
+</html>
