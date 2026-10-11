@@ -1,0 +1,345 @@
+//@version=6
+// ============================================================================
+//  Trendline Bounce + Supply/Demand Toolkit
+//  Built for XAUUSD (gold), tuned for 15m and 4H charts. Works on any symbol.
+// ----------------------------------------------------------------------------
+//  WHAT IT DOES
+//  1. Auto draws trendlines through confirmed pivot highs (resistance, red)
+//     and pivot lows (support, teal), extended to the right.
+//  2. Counts touches where price comes within an ATR-based tolerance of a
+//     line and labels the line with its touch count.
+//  3. Plots "B" bounce signals when a candle wicks into a valid line and the
+//     body closes back on the trend side. Green B below the bar = long,
+//     red B above the bar = short. Optional 1R/2R projection.
+//  4. Detects supply (rally-base-drop) and demand (drop-base-rally) zones,
+//     draws them as boxes, grays them when mitigated, alerts on first entry.
+//
+//  REPAINT HONESTY (please read)
+//  - Pivots confirm pivRight bars AFTER the pivot bar, so trendlines appear
+//    with a lag of pivRight bars. Once a pivot is confirmed it never moves.
+//  - Touch counts on closed bars are final. The developing bar can add a
+//    touch that disappears if price moves away before the close.
+//  - Bounce "B" labels plot on the developing bar; the alert() call fires
+//    once at bar close (freq_once_per_bar_close), so alerts never repaint.
+//  - Zones are created only on confirmed bar closes. Zone entry alerts fire
+//    in realtime on first touch of an unmitigated zone.
+// ----------------------------------------------------------------------------
+//  INSTALL: TradingView -> Pine Editor -> paste this script -> "Add to chart"
+//  ALERTS:  TradingView -> Create Alert -> Condition: this indicator ->
+//           "Any alert() function call". Messages: "Bounce LONG signal",
+//           "Bounce SHORT signal", "Price entering SUPPLY zone",
+//           "Price entering DEMAND zone".
+// ============================================================================
+indicator("Trendline Bounce + Supply Demand Toolkit", shorttitle="TL+SD",
+     overlay=true, max_lines_count=500, max_boxes_count=500, max_labels_count=500)
+
+max_bars_back(close, 500)
+
+// ===================== INPUTS =====================
+grpTL   = "Trendlines"
+grpSig  = "Bounce signals"
+grpZone = "Supply and Demand"
+grpDisp = "Display"
+
+pivLeft      = input.int(5, "Pivot left bars", minval=1, maxval=50, group=grpTL)
+pivRight     = input.int(5, "Pivot right bars", minval=1, maxval=50, group=grpTL)
+atrLen       = input.int(14, "ATR length", minval=1, group=grpTL)
+tolMult      = input.float(0.25, "Touch tolerance (x ATR)", minval=0.05, maxval=2.0, step=0.05, group=grpTL)
+minTouches   = input.int(2, "Min touches for valid line", minval=2, maxval=10, group=grpTL)
+maxLinesSide = input.int(3, "Max lines kept per side", minval=1, maxval=10, group=grpTL)
+showTL       = input.bool(true, "Show trendlines", group=grpTL)
+showTouchLbl = input.bool(true, "Show touch count labels", group=grpTL)
+supColor     = input.color(color.teal, "Support color", group=grpTL)
+resColor     = input.color(color.red, "Resistance color", group=grpTL)
+
+showBounce = input.bool(true, "Show bounce signals", group=grpSig)
+showRR     = input.bool(true, "Show risk reward projection", group=grpSig)
+rrBars     = input.int(20, "RR projection length (bars)", minval=5, maxval=100, group=grpSig)
+
+showZones = input.bool(true, "Show supply demand zones", group=grpZone)
+baseLen   = input.int(3, "Base candles", minval=1, maxval=6, group=grpZone)
+bodyPct   = input.float(30.0, "Base max body (% of ATR)", minval=5.0, maxval=100.0, step=5.0, group=grpZone)
+legMult   = input.float(2.0, "Prior leg min move (x ATR)", minval=0.5, maxval=10.0, step=0.5, group=grpZone)
+brkMult   = input.float(0.8, "Breakout min body (x ATR)", minval=0.3, maxval=5.0, step=0.1, group=grpZone)
+legLen    = input.int(10, "Prior leg lookback bars", minval=3, maxval=50, group=grpZone)
+maxZones  = input.int(8, "Max zones kept", minval=1, maxval=20, group=grpZone)
+
+showInfo = input.bool(true, "Show info panel", group=grpDisp)
+
+// ===================== CORE CALCS =====================
+atr = ta.atr(atrLen)
+tol = atr * tolMult
+
+// ===================== INFO PANEL =====================
+var table infoTbl = table.new(position.top_right, 1, 4, bgcolor=color.new(color.black, 15), border_width=1)
+if showInfo and barstate.islast
+    isGold = str.contains(syminfo.ticker, "XAUUSD") or str.contains(syminfo.ticker, "GOLD")
+    tfMult = timeframe.multiplier
+    tfOk = timeframe.isintraday and (tfMult == 15 or tfMult == 240)
+    table.cell(infoTbl, 0, 0, "TL + SD Toolkit", text_color=color.white, text_size=size.small)
+    table.cell(infoTbl, 0, 1, isGold ? "Symbol: " + syminfo.ticker : "Not XAUUSD: " + syminfo.ticker,
+         text_color=isGold ? color.lime : color.orange, text_size=size.small)
+    table.cell(infoTbl, 0, 2, "TF: " + timeframe.period, text_color=color.white, text_size=size.small)
+    table.cell(infoTbl, 0, 3, tfOk ? "TF OK" : "Best on 15m or 4H",
+         text_color=tfOk ? color.lime : color.orange, text_size=size.small)
+
+// ===================== TRENDLINE STORAGE =====================
+var array<int>   phX = array.new_int()
+var array<float> phY = array.new_float()
+var array<int>   plX = array.new_int()
+var array<float> plY = array.new_float()
+
+var array<line>  resLn  = array.new_line()
+var array<int>   resX2  = array.new_int()
+var array<int>   resTch = array.new_int()
+var array<int>   resLTB = array.new_int()   // last touch bar
+var array<int>   resLSB = array.new_int()   // last signal bar
+var array<label> resLbl = array.new_label()
+
+var array<line>  supLn  = array.new_line()
+var array<int>   supX2  = array.new_int()
+var array<int>   supTch = array.new_int()
+var array<int>   supLTB = array.new_int()
+var array<int>   supLSB = array.new_int()
+var array<label> supLbl = array.new_label()
+
+// Add a trendline through two pivots. Anchors count as the first 2 touches.
+pushTrendLine(isRes, x1, y1, x2, y2) =>
+    col = isRes ? resColor : supColor
+    ln = line.new(x1, y1, x2, y2, extend=extend.right, color=col, width=1)
+    lb = showTouchLbl ? label.new(x2, y2, "2",
+         style=isRes ? label.style_label_down : label.style_label_up,
+         color=color.new(col, 100), textcolor=col, size=size.tiny) : na
+    if isRes
+        array.push(resLn, ln)
+        array.push(resX2, x2)
+        array.push(resTch, 2)
+        array.push(resLTB, x2)
+        array.push(resLSB, -1)
+        array.push(resLbl, lb)
+        if array.size(resLn) > maxLinesSide
+            line.delete(array.shift(resLn))
+            array.shift(resX2)
+            array.shift(resTch)
+            array.shift(resLTB)
+            array.shift(resLSB)
+            oldLb = array.shift(resLbl)
+            if not na(oldLb)
+                label.delete(oldLb)
+    else
+        array.push(supLn, ln)
+        array.push(supX2, x2)
+        array.push(supTch, 2)
+        array.push(supLTB, x2)
+        array.push(supLSB, -1)
+        array.push(supLbl, lb)
+        if array.size(supLn) > maxLinesSide
+            line.delete(array.shift(supLn))
+            array.shift(supX2)
+            array.shift(supTch)
+            array.shift(supLTB)
+            array.shift(supLSB)
+            oldLb = array.shift(supLbl)
+            if not na(oldLb)
+                label.delete(oldLb)
+
+ph = ta.pivothigh(high, pivLeft, pivRight)
+pl = ta.pivotlow(low, pivLeft, pivRight)
+
+if not na(ph) and showTL
+    px = bar_index - pivRight
+    array.push(phX, px)
+    array.push(phY, ph)
+    if array.size(phX) >= 2
+        s = array.size(phX)
+        pushTrendLine(true, array.get(phX, s - 2), array.get(phY, s - 2),
+             array.get(phX, s - 1), array.get(phY, s - 1))
+
+if not na(pl) and showTL
+    px = bar_index - pivRight
+    array.push(plX, px)
+    array.push(plY, pl)
+    if array.size(plX) >= 2
+        s = array.size(plX)
+        pushTrendLine(false, array.get(plX, s - 2), array.get(plY, s - 2),
+             array.get(plX, s - 1), array.get(plY, s - 1))
+
+// ===================== RISK REWARD DRAWING =====================
+drawRR(isLong, entry, stop) =>
+    r = math.abs(entry - stop)
+    line.new(bar_index, entry, bar_index + rrBars, entry,
+         color=color.new(color.gray, 0), style=line.style_dashed, width=1)
+    line.new(bar_index, stop, bar_index + rrBars, stop,
+         color=color.new(color.red, 0), width=1)
+    t1 = isLong ? entry + r : entry - r
+    t2 = isLong ? entry + 2 * r : entry - 2 * r
+    line.new(bar_index, t1, bar_index + rrBars, t1, color=color.new(color.green, 0), width=1)
+    line.new(bar_index, t2, bar_index + rrBars, t2,
+         color=color.new(color.green, 0), style=line.style_dashed, width=1)
+    label.new(bar_index + rrBars, entry, "Entry", style=label.style_label_left,
+         color=color.new(color.gray, 100), textcolor=color.gray, size=size.tiny)
+    label.new(bar_index + rrBars, stop, "Stop", style=label.style_label_left,
+         color=color.new(color.gray, 100), textcolor=color.red, size=size.tiny)
+    label.new(bar_index + rrBars, t1, "1R", style=label.style_label_left,
+         color=color.new(color.gray, 100), textcolor=color.green, size=size.tiny)
+    label.new(bar_index + rrBars, t2, "2R", style=label.style_label_left,
+         color=color.new(color.gray, 100), textcolor=color.green, size=size.tiny)
+
+// ===================== TOUCH SCAN + BOUNCE SIGNALS =====================
+if showTL
+    // Resistance lines
+    if array.size(resLn) > 0
+        for i = 0 to array.size(resLn) - 1
+            ln = array.get(resLn, i)
+            x2 = array.get(resX2, i)
+            if bar_index > x2
+                ly = line.get_price(ln, bar_index)
+                if not na(ly)
+                    touched = math.abs(high - ly) <= tol
+                    if touched and bar_index != array.get(resLTB, i)
+                        array.set(resTch, i, array.get(resTch, i) + 1)
+                        array.set(resLTB, i, bar_index)
+                    lb = array.get(resLbl, i)
+                    if not na(lb)
+                        label.set_xy(lb, bar_index, ly)
+                        label.set_text(lb, str.tostring(array.get(resTch, i)))
+                    valid = array.get(resTch, i) >= minTouches
+                    if showBounce and valid and touched and close < ly - tol and bar_index != array.get(resLSB, i)
+                        array.set(resLSB, i, bar_index)
+                        label.new(bar_index, high, "B", style=label.style_label_down,
+                             color=color.red, textcolor=color.white, size=size.small)
+                        alert("Bounce SHORT signal", alert.freq_once_per_bar_close)
+                        if showRR
+                            drawRR(false, close, ly + tol)
+    // Support lines
+    if array.size(supLn) > 0
+        for i = 0 to array.size(supLn) - 1
+            ln = array.get(supLn, i)
+            x2 = array.get(supX2, i)
+            if bar_index > x2
+                ly = line.get_price(ln, bar_index)
+                if not na(ly)
+                    touched = math.abs(low - ly) <= tol
+                    if touched and bar_index != array.get(supLTB, i)
+                        array.set(supTch, i, array.get(supTch, i) + 1)
+                        array.set(supLTB, i, bar_index)
+                    lb = array.get(supLbl, i)
+                    if not na(lb)
+                        label.set_xy(lb, bar_index, ly)
+                        label.set_text(lb, str.tostring(array.get(supTch, i)))
+                    valid = array.get(supTch, i) >= minTouches
+                    if showBounce and valid and touched and close > ly + tol and bar_index != array.get(supLSB, i)
+                        array.set(supLSB, i, bar_index)
+                        label.new(bar_index, low, "B", style=label.style_label_up,
+                             color=color.teal, textcolor=color.white, size=size.small)
+                        alert("Bounce LONG signal", alert.freq_once_per_bar_close)
+                        if showRR
+                            drawRR(true, close, ly - tol)
+
+// ===================== SUPPLY DEMAND ZONES =====================
+var array<box>   supZBox = array.new_box()
+var array<float> supZTop = array.new_float()
+var array<float> supZBot = array.new_float()
+var array<bool>  supZMit = array.new_bool()
+var array<bool>  supZAlr = array.new_bool()
+var array<int>   supZBar = array.new_int()
+
+var array<box>   demZBox = array.new_box()
+var array<float> demZTop = array.new_float()
+var array<float> demZBot = array.new_float()
+var array<bool>  demZMit = array.new_bool()
+var array<bool>  demZAlr = array.new_bool()
+var array<int>   demZBar = array.new_int()
+
+trimZones() =>
+    while array.size(supZBox) > maxZones
+        box.delete(array.shift(supZBox))
+        array.shift(supZTop)
+        array.shift(supZBot)
+        array.shift(supZMit)
+        array.shift(supZAlr)
+        array.shift(supZBar)
+    while array.size(demZBox) > maxZones
+        box.delete(array.shift(demZBox))
+        array.shift(demZTop)
+        array.shift(demZBot)
+        array.shift(demZMit)
+        array.shift(demZAlr)
+        array.shift(demZBar)
+
+// Zone detection runs on confirmed bars only, so zones never repaint intrabar.
+// ta.* calls are hoisted here so they run on every bar (no inconsistent-call warnings).
+legTopRaw  = ta.highest(high, legLen)
+legBotRaw  = ta.lowest(low, legLen)
+baseTopRaw = ta.highest(high, baseLen)
+baseBotRaw = ta.lowest(low, baseLen)
+
+if showZones and barstate.isconfirmed
+    bodyMax = bodyPct / 100 * atr
+    isBase = true
+    for i = 1 to baseLen
+        if math.abs(close[i] - open[i]) >= bodyMax
+            isBase := false
+            break
+    if isBase
+        legTop = legTopRaw[baseLen + 1]
+        legBot = legBotRaw[baseLen + 1]
+        if not na(legTop) and not na(legBot)
+            legMove  = legTop - legBot
+            legOpen  = open[baseLen + legLen]
+            legClose = close[baseLen + 1]
+            baseTop  = baseTopRaw[1]
+            baseBot  = baseBotRaw[1]
+            curBody  = math.abs(close - open)
+            // SUPPLY: rally, base, drop
+            if legMove >= legMult * atr and legClose > legOpen and close < open and curBody >= brkMult * atr and close < baseBot
+                zb = box.new(bar_index - baseLen, baseTop, bar_index, baseBot,
+                     bgcolor=color.new(color.red, 80), border_color=color.red)
+                array.push(supZBox, zb)
+                array.push(supZTop, baseTop)
+                array.push(supZBot, baseBot)
+                array.push(supZMit, false)
+                array.push(supZAlr, false)
+                array.push(supZBar, bar_index)
+            // DEMAND: drop, base, rally
+            if legMove >= legMult * atr and legClose < legOpen and close > open and curBody >= brkMult * atr and close > baseTop
+                zb = box.new(bar_index - baseLen, baseTop, bar_index, baseBot,
+                     bgcolor=color.new(color.green, 80), border_color=color.green)
+                array.push(demZBox, zb)
+                array.push(demZTop, baseTop)
+                array.push(demZBot, baseBot)
+                array.push(demZMit, false)
+                array.push(demZAlr, false)
+                array.push(demZBar, bar_index)
+            trimZones()
+
+// Zone maintenance: extend, mitigate, alert on first entry.
+if showZones
+    if array.size(supZBox) > 0
+        for i = 0 to array.size(supZBox) - 1
+            b = array.get(supZBox, i)
+            box.set_right(b, bar_index)
+            if not array.get(supZMit, i)
+                top = array.get(supZTop, i)
+                bot = array.get(supZBot, i)
+                if close > top
+                    array.set(supZMit, i, true)
+                    box.set_bgcolor(b, color.new(color.gray, 85))
+                    box.set_border_color(b, color.gray)
+                else if bar_index > array.get(supZBar, i) and not array.get(supZAlr, i) and low <= top and high >= bot
+                    array.set(supZAlr, i, true)
+                    alert("Price entering SUPPLY zone", alert.freq_once_per_bar)
+    if array.size(demZBox) > 0
+        for i = 0 to array.size(demZBox) - 1
+            b = array.get(demZBox, i)
+            box.set_right(b, bar_index)
+            if not array.get(demZMit, i)
+                top = array.get(demZTop, i)
+                bot = array.get(demZBot, i)
+                if close < bot
+                    array.set(demZMit, i, true)
+                    box.set_bgcolor(b, color.new(color.gray, 85))
+                    box.set_border_color(b, color.gray)
+                else if bar_index > array.get(demZBar, i) and not array.get(demZAlr, i) and low <= top and high >= bot
+                    array.set(demZAlr, i, true)
+                    alert("Price entering DEMAND zone", alert.freq_once_per_bar)
